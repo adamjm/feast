@@ -1,78 +1,63 @@
-# Feast - Feature Store for Machine Learning [![Build Status](http://prow.feast.ai/badge.svg?jobs=integration-test)](http://prow.feast.ai)
+# Feast - Feature Store for Machine Learning
+
+[![Unit Tests](https://github.com/gojek/feast/workflows/unit%20tests/badge.svg?branch=master)](https://github.com/gojek/feast/actions?query=workflow%3A%22unit+tests%22+branch%3Amaster)
+[![Code Standards](https://github.com/gojek/feast/workflows/code%20standards/badge.svg?branch=master)](https://github.com/gojek/feast/actions?query=workflow%3A%22code+standards%22+branch%3Amaster)
+[![Docs latest](https://img.shields.io/badge/Docs-latest-blue.svg)](https://docs.feast.dev/)
+[![GitHub Release](https://img.shields.io/github/release/gojek/feast.svg?style=flat)](https://github.com/gojek/feast/releases)
 
 ## Overview
 
-Feast (Feature Store) is a tool to manage storage and access of machine learning features.
+Feast (Feature Store) is a tool for managing and serving machine learning features. Feast is the bridge between models and data.
 
-It aims to:
-* Support ingesting feature data via batch or streaming
-* Provide scalable storage of feature data for serving and training
-* Provide an API for low latency access of features
-* Enable discovery and documentation of features
-* Provide an overview of the general health of features in the system
+Feast aims to:
+* Provide a unified means of managing feature data from a single person to large enterprises.
+* Provide scalable and performant access to feature data when training and serving models.
+* Provide consistent and point-in-time correct access to feature data.
+* Enable discovery, documentation, and insights into your features.
 
-## High Level Architecture
+![](docs/.gitbook/assets/feast-docs-overview-diagram-2.svg)
 
-![Feast Architecture](docs/architecture.png)
+TL;DR: Feast decouples feature engineering from feature usage. Features that are added to Feast become available immediately for training and serving. Models can retrieve the same features used in training from a low latency online store in production.
+This means that new ML projects start with a process of feature selection from a catalog instead of having to do feature engineering from scratch.
 
-The Feast platform is broken down into the following functional areas:
+```
+# Setting things up
+fs = feast.Client('feast.example.com')
+customer_features = ['CreditScore', 'Balance', 'Age', 'NumOfProducts', 'IsActive']
 
-* __Create__ features based on defined format and programming model
-* __Ingest__ features via streaming input, import from files or BigQuery tables, and write to an appropriate data store
-* __Store__ feature data for both serving and training purposes based on feature access patterns
-* __Access__ features for training and serving
-* __Discover__ information about entities and features stored and served by Feast
+# Training your model (typically from a notebook or pipeline)
+data = fs.get_batch_features(customer_features, customer_entities)
+my_model = ml.fit(data)
 
-## Motivation
+# Serving predictions (when serving the model in production)
+prediction = my_model.predict(fs.get_online_features(customer_features, customer_entities))
+```
 
-__Access to features in serving__: Machine learning models typically require access to features created in both batch pipelines, and real time streams. Feast provides a means for accessing these features in a serving environment, at low latency and high load.
+## Getting Started with Docker Compose
+The following commands will start Feast in online-only mode. 
+```
+git clone https://github.com/gojek/feast.git
+cd feast/infra/docker-compose
+cp .env.sample .env
+docker-compose -f docker-compose.yml -f docker-compose.online.yml up -d
+```
 
-__Consistency between training and serving__: In many machine learning systems there exists a disconnect between features that are created in batch pipelines for the training of a model, and ones that are created from streams for the serving of real-time features. By centralizing the ingestion of features, Feast provides a consistent view of both batch and real-time features, in both training and serving.
+This will start a local Feast deployment with online serving. Additionally, a [Jupyter Notebook](http://localhost:8888/tree/feast/examples) with Feast examples.
 
-__Infrastructure management__: Feast abstracts away much of the engineering overhead associated with managing data infrastructure. It handles the ingestion, storage, and serving of large amount of feature data in a scalable way. The system  configures data models based on your registered feature specifications, and ensures that you always have a consistent view of features in both your historical and real-time data stores.
+Please see the links below to set up Feast for batch/historical serving with BigQuery.
 
-__Feature standardisation__: Feast presents a centralized platform on which teams can register features in a standardized way using specifications. This provides structure to the way features are defined and allows teams to reference features in discussions with a singly understood link. 
+## Important resources
 
-__Discovery__: Feast allows users to easily explore and discover features and their associated information. This allows for a deeper understanding of features and theirs specifications, more feature reuse between teams and projects, and faster experimentation. Each new ML project can leverage features that have been created by prior teams, which compounds an organization's ability to discover new insights. 
+Please refer to the official documentation at <https://docs.feast.dev>
 
-## More Information
-
-* [Components](docs/components.md)
-* [Concepts](docs/concepts.md)
-
-For Feast administrators:
-* [Installation quickstart](docs/install.md)
-* [Helm charts](charts/README.md) details
-
-For Feast end users:
-* [Creating features](docs/endusers.md)
-
-For Feast developers:
-* [Building the CLI](cli/README.md)
+ * [Why Feast?](https://docs.feast.dev/introduction/why-feast)
+ * [Concepts](https://docs.feast.dev/concepts/concepts)
+ * [Installation](https://docs.feast.dev/installation/overview)
+ * [Examples](https://github.com/gojek/feast/blob/master/examples/)
+ * [Roadmap](https://docs.feast.dev/roadmap)
+ * [Change Log](https://github.com/gojek/feast/blob/master/CHANGELOG.md)
+ * [Slack (#Feast)](https://join.slack.com/t/kubeflow/shared_invite/zt-cpr020z4-PfcAue_2nw67~iIDy7maAQ)
 
 ## Notice
 
-Feast is still under active development. Your feedback and contributions are important to us. Please check our [contributing guide](CONTRIBUTING.md) for details.
-
-## Source Code Headers
-
-Every file containing source code must include copyright and license
-information. This includes any JS/CSS files that you might be serving out to
-browsers. (This is to help well-intentioned people avoid accidental copying that
-doesn't comply with the license.)
-
-Apache header:
-
-    Copyright 2018 The Feast Authors
-
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
-
-        https://www.apache.org/licenses/LICENSE-2.0
-
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
+Feast is a community project and is still under active development. Your feedback and contributions are important to us. Please have a look at our [contributing guide](docs/contributing/contributing.md) for details.

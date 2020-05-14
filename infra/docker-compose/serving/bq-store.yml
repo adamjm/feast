@@ -1,0 +1,9 @@
+name: warehouse
+type: BIGQUERY
+bigquery_config:
+  project_id: <gcp-project-id>
+  dataset_id: <dataset-id>
+subscriptions:
+- name: "*"
+  project: "*"
+  version: "*"

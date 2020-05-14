@@ -1,5 +1,6 @@
 /*
- * Copyright 2018 The Feast Authors
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2018-2019 The Feast Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,21 +13,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
-
 package feast.ingestion.transform.fn;
 
 import com.google.protobuf.Message;
 import com.google.protobuf.util.JsonFormat;
 import com.google.protobuf.util.JsonFormat.Printer;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.slf4j.Logger;
 import org.slf4j.event.Level;
 
-@Slf4j
 public class LoggerDoFn extends DoFn<Message, Void> {
 
+  private static final Logger log = org.slf4j.LoggerFactory.getLogger(LoggerDoFn.class);
   private Level level;
   private String prefix = "";
 

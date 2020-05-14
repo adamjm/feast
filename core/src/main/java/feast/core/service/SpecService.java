@@ -1,5 +1,6 @@
 /*
- * Copyright 2018 The Feast Authors
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2018-2019 The Feast Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,41 +13,44 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
-
 package feast.core.service;
 
-import com.google.common.base.Strings;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
-import com.google.protobuf.util.JsonFormat;
-import feast.core.config.StorageConfig.StorageSpecs;
-import feast.core.dao.EntityInfoRepository;
-import feast.core.dao.FeatureGroupInfoRepository;
-import feast.core.dao.FeatureInfoRepository;
-import feast.core.exception.RegistrationException;
+import static feast.core.validators.Matchers.checkValidCharacters;
+import static feast.core.validators.Matchers.checkValidCharactersAllowAsterisk;
+
+import com.google.protobuf.InvalidProtocolBufferException;
+import feast.core.CoreServiceProto.ApplyFeatureSetResponse;
+import feast.core.CoreServiceProto.ApplyFeatureSetResponse.Status;
+import feast.core.CoreServiceProto.GetFeatureSetRequest;
+import feast.core.CoreServiceProto.GetFeatureSetResponse;
+import feast.core.CoreServiceProto.ListFeatureSetsRequest;
+import feast.core.CoreServiceProto.ListFeatureSetsResponse;
+import feast.core.CoreServiceProto.ListStoresRequest;
+import feast.core.CoreServiceProto.ListStoresResponse;
+import feast.core.CoreServiceProto.ListStoresResponse.Builder;
+import feast.core.CoreServiceProto.UpdateStoreRequest;
+import feast.core.CoreServiceProto.UpdateStoreResponse;
+import feast.core.FeatureSetProto;
+import feast.core.FeatureSetProto.FeatureSetStatus;
+import feast.core.SourceProto;
+import feast.core.StoreProto;
+import feast.core.StoreProto.Store.Subscription;
+import feast.core.dao.FeatureSetRepository;
+import feast.core.dao.ProjectRepository;
+import feast.core.dao.StoreRepository;
 import feast.core.exception.RetrievalException;
-import feast.core.log.Action;
-import feast.core.log.AuditLogger;
-import feast.core.log.Resource;
-import feast.core.model.EntityInfo;
-import feast.core.model.FeatureGroupInfo;
-import feast.core.model.FeatureInfo;
-import feast.core.model.StorageInfo;
-import feast.core.storage.SchemaManager;
-import feast.specs.EntitySpecProto.EntitySpec;
-import feast.specs.FeatureGroupSpecProto.FeatureGroupSpec;
-import feast.specs.FeatureSpecProto.FeatureSpec;
-import feast.specs.StorageSpecProto.StorageSpec;
-import java.util.HashMap;
+import feast.core.model.FeatureSet;
+import feast.core.model.Project;
+import feast.core.model.Source;
+import feast.core.model.Store;
+import feast.core.validators.FeatureSetValidator;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Facilitates management of specs within the Feast registry. This includes getting existing specs
@@ -56,288 +60,274 @@ import org.springframework.stereotype.Service;
 @Service
 public class SpecService {
 
-  private final EntityInfoRepository entityInfoRepository;
-  private final FeatureInfoRepository featureInfoRepository;
-  private final FeatureGroupInfoRepository featureGroupInfoRepository;
-  private final SchemaManager schemaManager;
-  @Getter
-  private final StorageSpecs storageSpecs;
+  private final FeatureSetRepository featureSetRepository;
+  private final ProjectRepository projectRepository;
+  private final StoreRepository storeRepository;
+  private final Source defaultSource;
 
   @Autowired
   public SpecService(
-      EntityInfoRepository entityInfoRegistry,
-      FeatureInfoRepository featureInfoRegistry,
-      FeatureGroupInfoRepository featureGroupInfoRepository,
-      SchemaManager schemaManager,
-      StorageSpecs storageSpecs) {
-    this.entityInfoRepository = entityInfoRegistry;
-    this.featureInfoRepository = featureInfoRegistry;
-    this.featureGroupInfoRepository = featureGroupInfoRepository;
-    this.schemaManager = schemaManager;
-    this.storageSpecs = storageSpecs;
+      FeatureSetRepository featureSetRepository,
+      StoreRepository storeRepository,
+      ProjectRepository projectRepository,
+      Source defaultSource) {
+    this.featureSetRepository = featureSetRepository;
+    this.storeRepository = storeRepository;
+    this.projectRepository = projectRepository;
+    this.defaultSource = defaultSource;
   }
 
   /**
-   * Retrieve a set of entity infos from the registry.
+   * Get a feature set matching the feature name and version and project. The feature set name and
+   * project are required, but version can be omitted by providing 0 for its value. If the version
+   * is omitted, the latest feature set will be provided.
    *
-   * @param ids - list of entity names
-   * @return a list of EntityInfos matching the ids given
-   * @throws RetrievalException if any of the requested ids is not found
-   * @throws IllegalArgumentException if the list of ids is empty
+   * @param request: GetFeatureSetRequest Request containing filter parameters.
+   * @return Returns a GetFeatureSetResponse containing a feature set..
    */
-  public List<EntityInfo> getEntities(List<String> ids) {
-    if (ids.size() == 0) {
-      throw new IllegalArgumentException("ids cannot be empty");
-    }
-    Set<String> dedupIds = Sets.newHashSet(ids);
+  public GetFeatureSetResponse getFeatureSet(GetFeatureSetRequest request)
+      throws InvalidProtocolBufferException {
 
-    List<EntityInfo> entityInfos = this.entityInfoRepository.findAllById(dedupIds);
-    if (entityInfos.size() < dedupIds.size()) {
+    // Validate input arguments
+    checkValidCharacters(request.getName(), "featureSetName");
+
+    if (request.getName().isEmpty()) {
+      throw new IllegalArgumentException("No feature set name provided");
+    }
+    if (request.getProject().isEmpty()) {
+      throw new IllegalArgumentException("No project provided");
+    }
+
+    FeatureSet featureSet;
+
+    featureSet =
+        featureSetRepository.findFeatureSetByNameAndProject_Name(
+            request.getName(), request.getProject());
+
+    if (featureSet == null) {
       throw new RetrievalException(
-          "unable to retrieve all entities requested " + ids);
+          String.format("Feature set with name \"%s\" could not be found.", request.getName()));
     }
-    return entityInfos;
+    return GetFeatureSetResponse.newBuilder().setFeatureSet(featureSet.toProto()).build();
   }
 
   /**
-   * Retrieves all entities in the registry
+   * Return a list of feature sets matching the feature set name and project provided in the filter.
+   * All fields are requried. Use '*' for all arguments in order to return all feature sets in all
+   * projects.
    *
-   * @return list of EntityInfos
-   * @throws RetrievalException if retrieval fails
+   * <p>Project name can be explicitly provided, or an asterisk can be provided to match all
+   * projects. It is not possible to provide a combination of asterisks/wildcards and text.
+   *
+   * <p>The feature set name in the filter accepts an asterisk as a wildcard. All matching feature
+   * sets will be returned. Regex is not supported. Explicitly defining a feature set name is not
+   * possible if a project name is not set explicitly
+   *
+   * @param filter filter containing the desired featureSet name
+   * @return ListFeatureSetsResponse with list of featureSets found matching the filter
    */
-  public List<EntityInfo> listEntities() {
-    return this.entityInfoRepository.findAll();
-  }
+  public ListFeatureSetsResponse listFeatureSets(ListFeatureSetsRequest.Filter filter)
+      throws InvalidProtocolBufferException {
+    String name = filter.getFeatureSetName();
+    String project = filter.getProject();
 
-  /**
-   * Retrieve a set of feature infos from the registry.
-   *
-   * @param ids - list of feature ids
-   * @return a list of FeatureInfos matching the ids given
-   * @throws RetrievalException if any of the requested ids is not found
-   * @throws IllegalArgumentException if the list of ids is empty
-   */
-  public List<FeatureInfo> getFeatures(List<String> ids) {
-    if (ids.size() == 0) {
-      throw new IllegalArgumentException("ids cannot be empty");
+    if (project.isEmpty() || name.isEmpty()) {
+      throw new IllegalArgumentException(
+          "Invalid listFeatureSetRequest, missing arguments. Must provide project and feature set name.");
     }
-    Set<String> dedupIds = Sets.newHashSet(ids);
 
-    List<FeatureInfo> featureInfos = this.featureInfoRepository.findAllById(dedupIds);
-    if (featureInfos.size() < dedupIds.size()) {
-      throw new RetrievalException(
-          "unable to retrieve all features requested: " + ids);
-    }
-    return featureInfos;
-  }
+    checkValidCharactersAllowAsterisk(name, "featureSetName");
+    checkValidCharactersAllowAsterisk(project, "projectName");
 
-  /**
-   * Retrieves all features in the registry
-   *
-   * @return list of FeatureInfos
-   * @throws RetrievalException if retrieval fails
-   */
-  public List<FeatureInfo> listFeatures() {
-    return this.featureInfoRepository.findAll();
-  }
+    List<FeatureSet> featureSets = new ArrayList<FeatureSet>() {};
 
-  /**
-   * Retrieve a set of feature group infos from the registry.
-   *
-   * @param ids - list of feature group ids
-   * @return a list of FeatureGroupInfos matching the ids given
-   * @throws RetrievalException if any of the requested ids is not found
-   * @throws IllegalArgumentException if the list of ids is empty
-   */
-  public List<FeatureGroupInfo> getFeatureGroups(List<String> ids) {
-    if (ids.size() == 0) {
-      throw new IllegalArgumentException("ids cannot be empty");
-    }
-    Set<String> dedupIds = Sets.newHashSet(ids);
-
-    List<FeatureGroupInfo> featureGroupInfos = this.featureGroupInfoRepository
-        .findAllById(dedupIds);
-    if (featureGroupInfos.size() < dedupIds.size()) {
-      throw new RetrievalException(
-          "unable to retrieve all feature groups requested " + dedupIds);
-    }
-    return featureGroupInfos;
-  }
-
-  /**
-   * Retrieves all feature groups in the registry
-   *
-   * @return list of FeatureGroupInfos
-   * @throws RetrievalException if retrieval fails
-   */
-  public List<FeatureGroupInfo> listFeatureGroups() {
-    return this.featureGroupInfoRepository.findAll();
-  }
-
-  /**
-   * Retrieve a set of storage infos from the registry.
-   *
-   * @param ids - List of storage ids
-   * @return a list of StorageInfos matching the ids given
-   * @throws RetrievalException if any of the requested ids is not found
-   * @throws IllegalArgumentException if the list of ids is empty
-   */
-  public List<StorageInfo> getStorage(List<String> ids) {
-    if (ids.size() == 0) {
-      throw new IllegalArgumentException("ids cannot be empty");
-    }
-    Set<String> dedupIds = Sets.newHashSet(ids);
-    List<StorageInfo> storageInfos = Lists.newArrayList();
-    StorageSpecs storageSpecs = getStorageSpecs();
-    Map<String, StorageSpec> map = new HashMap<>();
-    if (storageSpecs.getServingStorageSpec() != null) {
-      map.put(storageSpecs.getServingStorageSpec().getId(), storageSpecs.getServingStorageSpec());
-    }
-    if (storageSpecs.getWarehouseStorageSpec() != null) {
-      map.put(storageSpecs.getWarehouseStorageSpec().getId(), storageSpecs.getWarehouseStorageSpec());
-    }
-    for (String id : dedupIds) {
-      if (map.containsKey(id)) {
-        storageInfos.add(new StorageInfo(map.get(id)));
-      }
-    }
-    if (dedupIds.size() != storageInfos.size()) {
-      throw new RetrievalException(
-          "unable to retrieve all storage requested: " + ids);
-
-    }
-    return storageInfos;
-  }
-
-  /**
-   * Retrieves all storage specs in the registry
-   *
-   * @return list of StorageInfos
-   * @throws RetrievalException if retrieval fails
-   */
-  public List<StorageInfo> listStorage() {
-    return Lists.newArrayList(
-        new StorageInfo(getStorageSpecs().getServingStorageSpec()),
-        new StorageInfo(getStorageSpecs().getWarehouseStorageSpec()));
-  }
-
-  /**
-   * Applies the given feature spec to the registry. If the feature does not yet exist, it will be
-   * registered to the system. If it does, the existing feature will be updated with the new
-   * information.
-   *
-   * <p>Note that specifications that will affect downstream resources (e.g. id, storage location)
-   * cannot be changed.
-   *
-   * @param spec FeatureSpec
-   * @return registered FeatureInfo
-   * @throws RegistrationException if registration fails
-   */
-  public FeatureInfo applyFeature(FeatureSpec spec) {
-    try {
-      FeatureInfo featureInfo = featureInfoRepository.findById(spec.getId()).orElse(null);
-      Action action;
-      if (featureInfo != null) {
-        featureInfo.update(spec);
-        action = Action.UPDATE;
+    if (project.contains("*")) {
+      // Matching a wildcard project
+      if (name.contains("*")) {
+        featureSets =
+            featureSetRepository.findAllByNameLikeAndProject_NameLikeOrderByNameAsc(
+                name.replace('*', '%'), project.replace('*', '%'));
       } else {
-        EntityInfo entity = entityInfoRepository.findById(spec.getEntity()).orElse(null);
-        FeatureGroupInfo featureGroupInfo =
-            featureGroupInfoRepository.findById(spec.getGroup()).orElse(null);
-        featureInfo = new FeatureInfo(spec, entity, featureGroupInfo);
-        FeatureInfo resolvedFeatureInfo = featureInfo.resolve();
-        FeatureSpec resolvedFeatureSpec = resolvedFeatureInfo.getFeatureSpec();
-        schemaManager.registerFeature(resolvedFeatureSpec);
-        action = Action.REGISTER;
+        throw new IllegalArgumentException(
+            String.format(
+                "Invalid listFeatureSetRequest. Feature set name must be set to "
+                    + "\"*\" if the project name and feature set name aren't set explicitly: \n%s",
+                filter.toString()));
       }
-      FeatureInfo out = featureInfoRepository.saveAndFlush(featureInfo);
-      if (!out.getId().equals(spec.getId())) {
-        throw new RegistrationException("failed to register or update feature");
-      }
-      AuditLogger.log(
-          Resource.FEATURE,
-          spec.getId(),
-          action,
-          "Feature applied: %s",
-          JsonFormat.printer().print(spec));
-      return out;
+    } else if (!project.contains("*")) {
+      // Matching a specific project
+      if (name.contains("*")) {
+        // Find all feature sets matching a pattern in a specific project
+        featureSets =
+            featureSetRepository.findAllByNameLikeAndProject_NameOrderByNameAsc(
+                name.replace('*', '%'), project);
 
-    } catch (Exception e) {
-      throw new RegistrationException(
-          Strings.lenientFormat("Failed to apply feature %s: %s", spec, e.getMessage()), e);
+      } else if (!name.contains("*")) {
+        // Find a specific feature set in a specific project
+        FeatureSet featureSet =
+            featureSetRepository.findFeatureSetByNameAndProject_Name(name, project);
+        if (featureSet != null) {
+          featureSets.add(featureSet);
+        }
+      }
+    } else {
+      throw new IllegalArgumentException(
+          String.format(
+              "Invalid listFeatureSetRequest. Project name cannot be a pattern. It may only be"
+                  + "a specific project name or an asterisk: \n%s",
+              filter.toString()));
+    }
+
+    ListFeatureSetsResponse.Builder response = ListFeatureSetsResponse.newBuilder();
+    if (featureSets.size() > 0) {
+      for (FeatureSet featureSet : featureSets) {
+        response.addFeatureSets(featureSet.toProto());
+      }
+    }
+
+    return response.build();
+  }
+
+  /**
+   * Get stores matching the store name provided in the filter. If the store name is not provided,
+   * the method will return all stores currently registered to Feast.
+   *
+   * @param filter filter containing the desired store name
+   * @return ListStoresResponse containing list of stores found matching the filter
+   */
+  @Transactional
+  public ListStoresResponse listStores(ListStoresRequest.Filter filter) {
+    try {
+      String name = filter.getName();
+      if (name.equals("")) {
+        Builder responseBuilder = ListStoresResponse.newBuilder();
+        for (Store store : storeRepository.findAll()) {
+          responseBuilder.addStore(store.toProto());
+        }
+        return responseBuilder.build();
+      }
+      Store store =
+          storeRepository
+              .findById(name)
+              .orElseThrow(
+                  () ->
+                      new RetrievalException(
+                          String.format("Store with name '%s' not found", name)));
+      return ListStoresResponse.newBuilder().addStore(store.toProto()).build();
+    } catch (InvalidProtocolBufferException e) {
+      throw io.grpc.Status.NOT_FOUND
+          .withDescription("Unable to retrieve stores")
+          .withCause(e)
+          .asRuntimeException();
     }
   }
 
   /**
-   * Applies the given feature group spec to the registry. If the entity does not yet exist, it will
-   * be registered to the system. Otherwise, the fields will be updated as per the given feature
-   * group spec.
+   * Creates or updates a feature set in the repository.
    *
-   * @param spec FeatureGroupSpec
-   * @return registered FeatureGroupInfo
-   * @throws RegistrationException if registration fails
+   * <p>This function is idempotent. If no changes are detected in the incoming featureSet's schema,
+   * this method will update the incoming featureSet spec with the latest version stored in the
+   * repository, and return that.
+   *
+   * @param newFeatureSet Feature set that will be created or updated.
    */
-  public FeatureGroupInfo applyFeatureGroup(FeatureGroupSpec spec) {
-    try {
-      FeatureGroupInfo featureGroupInfo =
-          featureGroupInfoRepository.findById(spec.getId()).orElse(null);
-      Action action;
-      if (featureGroupInfo != null) {
-        featureGroupInfo.update(spec);
-        action = Action.UPDATE;
-      } else {
-        featureGroupInfo = new FeatureGroupInfo(spec);
-        action = Action.REGISTER;
-      }
-      FeatureGroupInfo out = featureGroupInfoRepository.saveAndFlush(featureGroupInfo);
-      if (!out.getId().equals(spec.getId())) {
-        throw new RegistrationException("failed to register or update feature group");
-      }
-      AuditLogger.log(
-          Resource.FEATURE_GROUP,
-          spec.getId(),
-          action,
-          "Feature group applied: %s",
-          JsonFormat.printer().print(spec));
-      return out;
-    } catch (Exception e) {
-      throw new RegistrationException(
-          Strings.lenientFormat(
-              "Failed to register new feature group %s: %s", spec, e.getMessage()),
-          e);
+  public ApplyFeatureSetResponse applyFeatureSet(FeatureSetProto.FeatureSet newFeatureSet)
+      throws InvalidProtocolBufferException {
+
+    // Validate incoming feature set
+    FeatureSetValidator.validateSpec(newFeatureSet);
+
+    // Find project or create new one if it does not exist
+    String project_name = newFeatureSet.getSpec().getProject();
+    Project project =
+        projectRepository
+            .findById(newFeatureSet.getSpec().getProject())
+            .orElse(new Project(project_name));
+
+    // Ensure that the project retrieved from repository is not archived
+    if (project.isArchived()) {
+      throw new IllegalArgumentException(String.format("Project is archived: %s", project_name));
     }
+
+    // Set source to default if not set in proto
+    if (newFeatureSet.getSpec().getSource() == SourceProto.Source.getDefaultInstance()) {
+      newFeatureSet =
+          newFeatureSet
+              .toBuilder()
+              .setSpec(
+                  newFeatureSet.getSpec().toBuilder().setSource(defaultSource.toProto()).build())
+              .build();
+    }
+
+    // Retrieve existing FeatureSet
+    FeatureSet featureSet =
+        featureSetRepository.findFeatureSetByNameAndProject_Name(
+            newFeatureSet.getSpec().getName(), project_name);
+
+    Status status;
+    if (featureSet == null) {
+      // Create new feature set since it doesn't exist
+      newFeatureSet = newFeatureSet.toBuilder().setSpec(newFeatureSet.getSpec()).build();
+      featureSet = FeatureSet.fromProto(newFeatureSet);
+      status = Status.CREATED;
+    } else {
+      // If the featureSet remains unchanged, we do nothing.
+      if (featureSet.toProto().getSpec().equals(newFeatureSet.getSpec())) {
+        return ApplyFeatureSetResponse.newBuilder()
+            .setFeatureSet(featureSet.toProto())
+            .setStatus(Status.NO_CHANGE)
+            .build();
+      }
+      featureSet.updateFromProto(newFeatureSet);
+      status = Status.UPDATED;
+    }
+
+    // Persist the FeatureSet object
+    featureSet.setStatus(FeatureSetStatus.STATUS_PENDING);
+    project.addFeatureSet(featureSet);
+    projectRepository.saveAndFlush(project);
+
+    // Build ApplyFeatureSetResponse
+    return ApplyFeatureSetResponse.newBuilder()
+        .setFeatureSet(featureSet.toProto())
+        .setStatus(status)
+        .build();
   }
 
   /**
-   * Applies the given entity spec to the registry. If the entity does not yet exist, it will be
-   * registered to the system. Otherwise, the fields will be updated as per the given entity spec.
+   * UpdateStore updates the repository with the new given store.
    *
-   * @param spec EntitySpec
-   * @return registered EntityInfo
-   * @throws RegistrationException if registration fails
+   * @param updateStoreRequest containing the new store definition
+   * @return UpdateStoreResponse containing the new store definition
    */
-  public EntityInfo applyEntity(EntitySpec spec) {
-    try {
-      EntityInfo entityInfo = entityInfoRepository.findById(spec.getName()).orElse(null);
-      Action action;
-      if (entityInfo != null) {
-        entityInfo.update(spec);
-        action = Action.UPDATE;
-      } else {
-        entityInfo = new EntityInfo(spec);
-        action = Action.REGISTER;
+  @Transactional
+  public UpdateStoreResponse updateStore(UpdateStoreRequest updateStoreRequest)
+      throws InvalidProtocolBufferException {
+    StoreProto.Store newStoreProto = updateStoreRequest.getStore();
+
+    List<Subscription> subs = newStoreProto.getSubscriptionsList();
+    for (Subscription sub : subs) {
+      // Ensure that all fields in a subscription contain values
+      if ((sub.getName().isEmpty()) || sub.getProject().isEmpty()) {
+        throw new IllegalArgumentException(
+            String.format("Missing parameter in subscription: %s", sub));
       }
-      EntityInfo out = entityInfoRepository.saveAndFlush(entityInfo);
-      if (!out.getName().equals(spec.getName())) {
-        throw new RegistrationException("failed to register or update entity");
-      }
-      AuditLogger.log(
-          Resource.FEATURE_GROUP, spec.getName(), action, "Entity: %s",
-          JsonFormat.printer().print(spec));
-      return out;
-    } catch (Exception e) {
-      throw new RegistrationException(
-          Strings.lenientFormat("Failed to apply entity %s: %s", spec, e.getMessage()), e);
     }
+    Store existingStore = storeRepository.findById(newStoreProto.getName()).orElse(null);
+
+    // Do nothing if no change
+    if (existingStore != null && existingStore.toProto().equals(newStoreProto)) {
+      return UpdateStoreResponse.newBuilder()
+          .setStatus(UpdateStoreResponse.Status.NO_CHANGE)
+          .setStore(updateStoreRequest.getStore())
+          .build();
+    }
+
+    Store newStore = Store.fromProto(newStoreProto);
+    storeRepository.save(newStore);
+    return UpdateStoreResponse.newBuilder()
+        .setStatus(UpdateStoreResponse.Status.UPDATED)
+        .setStore(updateStoreRequest.getStore())
+        .build();
   }
 }

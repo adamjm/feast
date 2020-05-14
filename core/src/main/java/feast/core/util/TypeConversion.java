@@ -1,5 +1,6 @@
 /*
- * Copyright 2018 The Feast Authors
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2018-2019 The Feast Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,16 +13,15 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
-
 package feast.core.util;
 
+import com.google.common.base.Strings;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-
 import java.lang.reflect.Type;
 import java.util.*;
+import java.util.Map.Entry;
 
 public class TypeConversion {
   private static Gson gson = new Gson();
@@ -59,8 +59,7 @@ public class TypeConversion {
     if (jsonString == null || jsonString.equals("") || jsonString.equals("{}")) {
       return Collections.emptyMap();
     }
-    Type stringMapType = new TypeToken<Map<String, String>>() {
-    }.getType();
+    Type stringMapType = new TypeToken<Map<String, String>>() {}.getType();
     return gson.fromJson(jsonString, stringMapType);
   }
 
@@ -71,9 +70,20 @@ public class TypeConversion {
    * @return json string corresponding to given map
    */
   public static String convertMapToJsonString(Map<String, String> map) {
-    if (map.isEmpty()) {
-      return "{}";
-    }
     return gson.toJson(map);
+  }
+
+  /**
+   * Convert a map of key value pairs to a array of java arguments in format --key=value
+   *
+   * @param map
+   * @return array of string arguments
+   */
+  public static String[] convertMapToArgs(Map<String, String> map) {
+    List<String> args = new ArrayList<>();
+    for (Entry<String, String> arg : map.entrySet()) {
+      args.add(Strings.lenientFormat("--%s=%s", arg.getKey(), arg.getValue()));
+    }
+    return args.toArray(new String[] {});
   }
 }

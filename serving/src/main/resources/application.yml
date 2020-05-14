@@ -1,0 +1,78 @@
+feast:
+  # GRPC service address for Feast Core
+  # Feast Serving requires connection to Feast Core to retrieve and reload Feast metadata (e.g. FeatureSpecs, Store information)
+  core-host: ${FEAST_CORE_HOST:localhost}
+  core-grpc-port: ${FEAST_CORE_GRPC_PORT:6565}
+
+  # Indicates the active store. Only a single store in the last can be active at one time. In the future this key
+  # will be deprecated in order to allow multiple stores to be served from a single serving instance
+  active_store: online
+
+  # List of store configurations
+  stores:
+      # Below are two store configurations. One for Redis and one for BigQuery.
+      # Please see https://api.docs.feast.dev/grpc/feast.core.pb.html#Store for configuration options
+    - name: online # Name of the store (referenced by active_store)
+      type: REDIS # Type of the store. REDIS, BIGQUERY are available options
+      config:  # Store specific configuration. See
+        host: localhost
+        port: 6379
+      # Subscriptions indicate which feature sets needs to be retrieved and used to populate this store
+      subscriptions:
+        # Wildcards match all options. No filtering is done.
+        - name: "*"
+          project: "*"
+
+    - name: historical
+      type: BIGQUERY
+      config:  # Store specific configuration.
+        # GCP Project
+        project_id: my_project
+        # BigQuery Dataset Id
+        dataset_id: my_dataset
+        # staging-location specifies the URI to store intermediate files for batch serving.
+        # Feast Serving client is expected to have read access to this staging location
+        # to download the batch features.
+        # For example: gs://mybucket/myprefix
+        # Please omit the trailing slash in the URI.
+        staging_location: gs://mybucket/myprefix
+        # Retry options for BigQuery retrieval jobs
+        initial_retry_delay_seconds: 1
+        # BigQuery timeout for retrieval jobs
+        total_timeout_seconds: 21600
+      subscriptions:
+        - name: "*"
+          project: "*"
+
+  tracing:
+    # If true, Feast will provide tracing data (using OpenTracing API) for various RPC method calls
+    # which can be useful to debug performance issues and perform benchmarking
+    enabled: false
+    # Only Jaeger tracer is supported currently
+    # https://opentracing.io/docs/supported-tracers/
+    tracer-name: jaeger
+    # The service name identifier for the tracing data
+    service-name: feast_serving
+
+  # The job store is used to maintain job management state for Feast Serving. This is required when using certain
+  # historical stores like BigQuery. Only Redis is supported as a job store.
+  job_store:
+    # Redis host to connect to
+    redis_host: localhost
+    # Redis port to connect to
+    redis_port: 6379
+
+grpc:
+  # The port number Feast Serving GRPC service should listen on
+  # It is set default to 6566 so it does not conflict with the GRPC server on Feast Core
+  # which defaults to port 6565
+  port: ${GRPC_PORT:6566}
+  # This allows client to discover GRPC endpoints easily
+  # https://github.com/grpc/grpc-java/blob/master/documentation/server-reflection-tutorial.md
+  enable-reflection: ${GRPC_ENABLE_REFLECTION:true}
+
+server:
+  # The port number on which the Tomcat webserver that serves REST API endpoints should listen
+  # It is set by default to 8081 so it does not conflict with Tomcat webserver on Feast Core
+  # if both Feast Core and Serving are running on the same machine
+  port: ${SERVER_PORT:8081}
